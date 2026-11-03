@@ -1,0 +1,41 @@
+{
+  "name": "warm-window",
+  "version": "0.1.0",
+  "description": "Find your Claude Code idle tax: what you pay to re-cache long conversations after breaks, and what keeping the cache warm or compacting first would save.",
+  "type": "module",
+  "bin": {
+    "warm-window": "bin/warm-window.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "scan": "node bin/warm-window.js scan"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "prompt-caching",
+    "cache",
+    "compaction",
+    "llm",
+    "cost",
+    "tokens",
+    "agents"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shoberman2/warm-window.git"
+  },
+  "homepage": "https://github.com/Shoberman2/warm-window#readme",
+  "bugs": "https://github.com/Shoberman2/warm-window/issues",
+  "license": "MIT"
+}
