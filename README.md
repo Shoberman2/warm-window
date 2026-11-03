@@ -1,60 +1,116 @@
 # warm-window
 
-**Find your Claude Code idle tax:** what you pay to re-cache a long conversation after it sits idle, and what keeping the cache warm or compacting first would have saved.
+**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it.**
 
 ```
 npx warm-window scan
 ```
 
-Runs locally in a few seconds. It reads only token counts and timestamps from `~/.claude/projects`, never your messages, and sends nothing anywhere. No dependencies.
+`warm-window` is a free command-line tool for [Claude Code](https://claude.com/claude-code) users. It reads the usage logs Claude Code already keeps on your computer and shows you your **idle tax**: the extra money (or plan usage) spent re-loading long conversations after they sat idle. It then replays your real history to show what each possible fix would have saved.
 
-## Why this exists
+- **Private:** runs entirely on your machine. It reads only token counts and timestamps, never your messages or code, and sends nothing anywhere.
+- **Fast:** a few seconds for months of history.
+- **Zero setup:** no account, no API key, no dependencies. Needs Node.js 18 or newer.
 
-Every time an agent replies, it re-sends the whole conversation to the model. **Prompt caching** makes that cheap: the provider remembers the conversation it already processed, and re-reading it costs only 2.5–10% of the normal price.
+> Not on npm yet? Run it straight from GitHub: `npx github:Shoberman2/warm-window scan`
 
-But the cache **expires**, after 5 minutes or 1 hour depending on settings. When you come back from lunch to a 200k-token session, the whole thing has to be cached again at the *premium* write price. A subagent waiting more than 5 minutes on a slow build hits the same problem. Your hit rate still looks like 98%, while a big share of your bill comes from these few cold returns.
+---
 
-Providers ship the building blocks (cache diagnostics, compaction, pre-warming), but nothing decides **when** to use them. Every compaction trigger today is based on token count, not on whether you just walked away.
+## What it is
 
-`warm-window` measures that gap on your own history and simulates the fixes.
+Every AI agent conversation has a **context**: everything said so far, plus files read, tool output and instructions. A long Claude Code session can hold 100,000–400,000 tokens of context, and the **whole context is sent to the model again on every single turn.**
 
-## What you get
+To make that affordable, Anthropic uses **prompt caching**. The model provider keeps the already-processed conversation in memory, so re-reading it costs only 2.5–10% of the normal price, depending on the model (a **cache hit**). It's what makes long agent sessions affordable.
+
+But the cache **expires**: after 5 minutes by default, or 1 hour if configured. When you return after it expires, the whole conversation has to be processed and stored again at the *premium* write price, 1.25x–2x the normal input price. That is a **cache miss**, and on a 200k-token session one miss costs as much as dozens of warm turns.
+
+`warm-window` measures how often that happens to you, what it costs, and which strategy would have cost the least.
+
+## Why you need it
+
+**Your dashboard says everything is fine.** A typical heavy user sees a 95–98% cache hit rate and assumes caching is working. But hit rate counts tokens, not money. The few misses are the most expensive moments in your bill, and no existing tool reports them separately.
+
+From the author's own three months of Claude Code use:
+
+| | |
+|---|---|
+| Cache hit rate | **97.9%**, looks perfect |
+| Times a long conversation went cold and was re-cached | **459** |
+| Cost of those re-caches above a warm cache (the idle tax) | **$600, 16.3% of all cache spend** |
+| Share of all cache writes that were just re-caching after a gap | **40.6%** |
+
+It happens in two ways, and both surprised us:
+
+1. **You take a break.** Lunch, a meeting, overnight. The 1-hour cache dies and the next message re-caches everything.
+2. **A subagent waits.** Subagents use the 5-minute cache. If one waits more than 5 minutes on a slow build or test run, its whole conversation is re-cached. In the data above, this was **half the idle tax**, and invisible from the main session.
+
+**The obvious fixes can backfire.** Switching everything to the 1-hour cache sounds right, but every write then costs 2x instead of 1.25x. On the history above it would have **cost $164 more**, not less. You can't tell which fix is right without replaying your own pattern of breaks, and that's what this tool does.
+
+**Nothing else does this.** Provider dashboards show hit rate and spend. Observability tools (Langfuse, Helicone and others) show per-request cost. Claude Code's compaction triggers on how *full* the context is, never on *how long you've been gone*. No tool connects "you stepped away" to "you paid to re-cache", and none tests a fix against your own history before you commit to it.
+
+## How it works
+
+```
+~/.claude/projects/**/*.jsonl   →   find every gap   →   price it   →   replay 5 strategies
+ (logs Claude Code already keeps)    (per session &       (real model        (on the same gaps)
+                                      per subagent)        prices)
+```
+
+1. **Read your logs.** Claude Code saves each session and each subagent as a `.jsonl` file under `~/.claude/projects`. Every model reply in them records token usage: how much was read from cache, how much was written, and whether the write used the 5-minute or 1-hour cache. `warm-window` reads only those numbers and timestamps.
+2. **Find the cold returns.** Each session and subagent has its own cache, so they're analyzed separately. A **cold return** is a pause longer than 5 minutes followed by a large cache write (≥ 20k tokens): the conversation had to be re-cached from scratch.
+3. **Price them.** Each re-cache is priced at that model's list price (Opus, Sonnet, Haiku, Fable; with 5-minute or 1-hour write rates). The **idle tax** is what you paid minus what the same tokens would have cost as a cheap cache read if the cache had still been warm.
+4. **Replay the fixes.** Every gap in your history is re-run under each strategy below, and the costs are compared side by side.
+
+### The strategies it compares
+
+| Strategy | What it does | Trade-off |
+|---|---|---|
+| **What you did** | Your actual history | The baseline |
+| **Force 1-hour cache** | Every write uses the 1-hour cache (`"promptCacheTtl": "1h"`) | Every write costs 2x instead of 1.25x. Only pays off if your breaks are mostly 5–60 min. |
+| **Compact before expiry** | Summarize the conversation just before the cache expires, while reading it is still cheap, then continue from the short summary | Summaries lose detail such as exact file paths and IDs |
+| **Keep warm** | Send a tiny request that generates nothing (`max_tokens: 0`) just before expiry, so the cache stays alive, up to a limit | Cheap on the 1-hour cache, costly on the 5-minute one. May count against plan limits. |
+| **Warm Window** (keep warm, then compact) | Keep the cache warm through short breaks; if you're gone longer than *K* minutes, compact while it's still warm. *K* is tuned on your own history. | The strategy this project wants to automate |
+| **Best possible** | The cheapest choice for each gap, picked with hindsight | A floor no real policy can reach; shows how much is left on the table |
+
+## Example output
 
 ```
   THE RECEIPT
   Cache hit rate          97.9% (looks great, hides the expensive moments)
-  Cache spend (est.)      $3681 = $2122 reads + $1560 writes
-  Cold returns            457 times a conversation resumed after its cache expired (~197k tokens re-cached each)
-    you took a break       193 · $303 idle tax
+  Cache spend (est.)      $3684 = $2122 reads + $1562 writes
+  Cold returns            459 times a conversation resumed after its cache expired (~196k tokens re-cached each)
+    you took a break       195 · $304 idle tax
     a subagent waited      264 · $297 idle tax (slow tool, 5-min cache)
-  Re-cached after gaps    89.9M tokens = 40.6% of all cache writes
+  Re-cached after gaps    90.0M tokens = 40.6% of all cache writes
   Idle tax                $600 = 16.3% of cache spend, extra paid vs. a warm cache
 
   HOW LONG THE GAPS WERE  (you / subagent)
   5-15 min    ████████████████████████    3 / 236  · $272
+  15-60 min   ██░░░░░░░░░░░░░░░░░░░░░░    1 / 19   · $29.58
   1-4 h       ██████████░░░░░░░░░░░░░░   90 / 7    · $142
-  ...
+  4-24 h      ███████░░░░░░░░░░░░░░░░░   68 / 1    · $110
+  > 1 day     ███░░░░░░░░░░░░░░░░░░░░░   33 / 1    · $65.15
 
-  WHAT EACH FIX WOULD HAVE COST  (same 1426 gaps, cache cost around them)
-  What you did                                                         $633  baseline
-  Force 1-hour cache everywhere                                        $797  costs $164 more
-  Compact right before the cache expires                               $225  saves $408 (64.5%)
-  Keep warm up to 120 min, then let it expire                          $311  saves $322 (50.9%)
-  Keep warm up to 120 min, then compact (Warm Window)                  $140  saves $493 (77.9%)
-  Best possible (hindsight, not achievable)                          $92.08  saves $541 (85.5%)
+  WHAT EACH FIX WOULD HAVE COST  (same 1429 gaps, cache cost around them)
+  What you did                                                         $634  baseline
+  Force 1-hour cache everywhere                                        $798  costs $164 more
+  Compact right before the cache expires                               $225  saves $408 (64.4%)
+  Keep warm up to 120 min, then let it expire                          $312  saves $322 (50.8%)
+  Keep warm up to 120 min, then compact (Warm Window)                  $141  saves $493 (77.8%)
+  Best possible (hindsight, not achievable)                          $92.68  saves $541 (85.4%)
 ```
 
-*(Real output from the author's three months of Claude Code use.)*
+The full report also lists which projects the idle tax came from (folder names only), what you can do about it today, and a one-line receipt you can share.
 
-### The fixes it simulates
+**How to read it:** in this history, most subagent misses were 5–15 minute waits on the 5-minute cache, and most of the user's own misses were 1–24 hour breaks. Forcing the 1-hour cache everywhere made things worse; keeping warm through short gaps and compacting before long ones would have removed about 78% of the idle tax.
 
-| Policy | What it does | Trade-off |
-|---|---|---|
-| **Force 1-hour cache** | Every cache write uses the 1-hour lifetime (`"promptCacheTtl": "1h"`) | Every write costs 2x instead of 1.25x. Helps only if your breaks are 5–60 min. |
-| **Compact before expiry** | Summarize the conversation just before the cache expires, while re-reading it is still cheap | Each compaction loses detail. Summaries keep only a fraction of exact file paths and IDs ([Compact-Bench](https://arxiv.org/html/2610.31710)). |
-| **Keep warm** | Send a tiny no-output request (`max_tokens: 0`) just before expiry so the cache stays alive | Cheap with 1-hour caches, expensive with 5-minute ones. May count against plan usage. |
-| **Warm Window** (keep warm, then compact) | Keep warm through short breaks; if you're gone longer than *K* minutes, compact while still warm. *K* is tuned on your history. | The policy this project wants to automate. |
-| **Hindsight** | The cheapest choice for each gap if you'd known when you'd come back | A floor, not achievable. |
+## What you can do today
+
+Based on your report:
+
+1. **Before you step away from a long session, run `/compact`** (or start a fresh session with a short handoff note). Compacting while the cache is warm costs a cheap read; coming back to a cold 200k-token session costs a full re-cache.
+2. **If most of your gaps are 5–60 minutes,** try `"promptCacheTtl": "1h"` in `~/.claude/settings.json`. Check the "Force 1-hour cache" line first: if it says *costs more*, don't.
+3. **Want this done automatically?** 👍 [issue #1](https://github.com/Shoberman2/warm-window/issues/1). It decides whether the auto-policy gets built.
 
 ## Options
 
@@ -65,28 +121,41 @@ npx warm-window scan [options]
   --days <n>            only the last n days
   --min-write <tokens>  smallest re-cache that counts as a cold return (default 20000)
   --summary <tokens>    assumed compaction summary size (default 10000)
-  --json                machine-readable output
-  --receipt             one-line shareable receipt
-  --paths               show full project paths
+  --json                machine-readable output (project names shortened unless --paths)
+  --receipt             print only the one-line shareable receipt
+  --paths               show full project paths instead of folder names
   --top <n>             projects to list (default 5)
+  -v, --version
+  -h, --help
 ```
 
-## How the numbers are computed
+## Limits and honesty
 
-- **Cold return:** a cache write of at least 20k tokens after a gap of more than 5 minutes in the same session or subagent. Some may be deliberate fresh starts, so treat the idle tax as an upper bound.
-- **Idle tax:** what those re-caches cost, minus what the same tokens would have cost as warm cache reads.
-- **Prices:** Anthropic API list prices per model, with cache writes at 1.25x (5-minute TTL) or 2x (1-hour TTL) of the input price. On a Pro or Max plan you pay in usage limits rather than dollars, but the proportions hold.
-- **Simulations:** each policy is replayed on every gap of 4 minutes or more in your history. They assume the conversation would otherwise have gone the same way, and they ignore that compaction also makes later turns cheaper. A summary is assumed to be 10k output tokens (`--summary`).
-- **Not modeled:** what a compaction loses. That is the next thing to measure. See the roadmap.
+- **Estimates, not a bill.** Costs use Anthropic API list prices. On a Pro or Max plan you pay in usage limits instead of dollars, but the proportions are the same: an idle re-cache burns limit just like it burns money.
+- **An upper bound.** Some cold returns are deliberate fresh starts that would have happened anyway.
+- **Simulations are simplified.** They assume the conversation would otherwise have gone the same way, assume a 10k-token summary (`--summary`), and ignore that compaction also makes later turns cheaper.
+- **Compaction loses information.** The cost model doesn't yet measure what a summary forgets. That's on the roadmap.
+- **Claude Code only, for now.** Other agents and the raw APIs are on the roadmap.
 
 ## Roadmap
 
-This is the first, measuring-only step. What gets built next depends on whether people want it:
+This first version only measures. What gets built next depends on whether people want it:
 
-- [ ] **Auto-policy:** a Claude Code hook or proxy that keeps the cache warm and compacts before expiry for you. **[👍 issue #1](https://github.com/Shoberman2/warm-window/issues/1) if you want this.**
-- [ ] **Quality guard:** a deterministic index of files, IDs and done/pending tasks kept alongside each summary, so compaction stops forgetting exact details.
-- [ ] **Replay scoring:** grade a compaction policy on your own past sessions (cost *and* what it forgot).
+- [ ] **Auto-policy:** a Claude Code hook or local proxy that keeps the cache warm and compacts before expiry for you. **[👍 issue #1](https://github.com/Shoberman2/warm-window/issues/1) if you want this.**
+- [ ] **Quality guard:** a precise index of files, IDs and open tasks kept alongside each summary, so compaction stops forgetting exact details.
+- [ ] **Replay scoring:** grade a compaction strategy on your own past sessions for both cost *and* what it forgot.
 - [ ] Support for other agents (Codex CLI, OpenCode) and the raw Anthropic and OpenAI APIs.
+
+## Contributing
+
+```
+git clone https://github.com/Shoberman2/warm-window
+cd warm-window
+npm test                 # 8 tests, no dependencies to install
+node bin/warm-window.js scan
+```
+
+Issues and pull requests are welcome. The most useful contribution right now is running `npx warm-window scan --receipt` and pasting the line into [issue #1](https://github.com/Shoberman2/warm-window/issues/1): it shows whether the idle tax is big for people other than the author.
 
 ## Background
 

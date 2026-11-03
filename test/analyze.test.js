@@ -107,3 +107,16 @@ test('CLI scan works end to end on a folder', () => {
   const { streams } = loadStreams(dir);
   assert.equal(streams.length, 2);
 });
+
+test('no cold returns: report says so instead of pitching a $0 fix', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ww-'));
+  mkdirSync(join(dir, 'p'));
+  writeFileSync(
+    join(dir, 'p', 'a.jsonl'),
+    [line({ t: min(0), id: 'a', w1h: 30000 }), line({ t: min(1), id: 'b', read: 30000, w1h: 100 })].join('\n'),
+  );
+  const bin = fileURLToPath(new URL('../bin/warm-window.js', import.meta.url));
+  const text = execFileSync(process.execPath, [bin, 'scan', '--dir', dir], { env: { ...process.env, NO_COLOR: '1' } }).toString();
+  assert.match(text, /No idle tax found/);
+  assert.doesNotMatch(text, /WHAT EACH FIX/);
+});

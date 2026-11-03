@@ -56,14 +56,25 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
 
   // ---- receipt
   L.push(bold('  THE RECEIPT'));
-  L.push(`  Cache hit rate          ${pct(t.readTokens / Math.max(1, t.readTokens + t.writeTokens))} ${dim('(looks great, hides the expensive moments)')}`);
+  const hit = t.readTokens / Math.max(1, t.readTokens + t.writeTokens);
+  const hitNote = hit >= 0.9 && I.events > 0 ? dim('(looks great, hides the expensive moments)') : '';
+  L.push(`  Cache hit rate          ${pct(hit)} ${hitNote}`);
   L.push(`  Cache spend (est.)      ${usd(t.cacheSpend)} ${dim(`= ${usd(t.readCost)} reads + ${usd(t.writeCost)} writes`)}`);
-  L.push(`  Cold returns            ${bold(I.events)} ${dim(`times a conversation resumed after its cache expired (~${tok(I.avgRewrite)} tokens re-cached each)`)}`);
+  L.push(`  Cold returns            ${bold(I.events)} ${dim(`times a conversation resumed after its cache expired${I.events ? ` (~${tok(I.avgRewrite)} tokens re-cached each)` : ''}`)}`);
   L.push(dim(`    you took a break      ${padL(I.byKind.main.events, 4)} · ${usd(I.byKind.main.tax)} idle tax`));
   L.push(dim(`    a subagent waited     ${padL(I.byKind.subagent.events, 4)} · ${usd(I.byKind.subagent.tax)} idle tax (slow tool, 5-min cache)`));
   L.push(`  Re-cached after gaps    ${tok(I.writeTokens)} tokens ${dim(`= ${pct(I.shareOfWrites)} of all cache writes`)}`);
   L.push(`  ${bold('Idle tax')}                ${bold(yellow(usd(I.tax)))} ${dim(`= ${pct(I.shareOfCacheSpend)} of cache spend, extra paid vs. a warm cache`)}`);
   L.push('');
+
+  if (I.events === 0) {
+    L.push(green('  No idle tax found.') + ' None of your long conversations went cold and had to be re-cached.');
+    L.push(dim('  Nothing to fix. Run this again after a few weeks of longer sessions.'));
+    L.push('');
+    L.push(dim(`  A "cold return" = a cache write ≥ ${tok(r.options.minWrite)} tokens after a gap > ${r.options.minGapMin} min. Nothing was sent anywhere.`));
+    L.push('');
+    return L.join('\n');
+  }
 
   // ---- when you come back
   L.push(bold('  HOW LONG THE GAPS WERE') + dim('  (you / subagent)'));
