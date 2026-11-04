@@ -129,8 +129,8 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
   L.push(
     dim(
       `  Estimates at Anthropic API list prices. On a Pro/Max plan you pay in usage limits, not dollars, but the proportions hold.\n` +
-        `  A "cold return" = a cache write ≥ ${tok(r.options.minWrite)} tokens after a gap > ${r.options.minGapMin} min. Some may be deliberate fresh starts.\n` +
-        `  Simulations assume a ${tok(r.options.summaryTokens)}-token summary and ignore that compaction also makes later turns cheaper.\n` +
+        `  A "cold return" = a cache write ≥ ${tok(r.options.minWrite)} tokens after a gap > ${r.options.minGapMin} min, where cache reads fell below half the prior context. Some may be deliberate fresh starts.\n` +
+        `  Simulations assume a ${tok(r.options.summaryTokens)}-token summary plus ${tok(r.options.prefixTokens)} tokens of system prompt re-cached after compacting, and ignore that compaction also makes later turns cheaper.\n` +
         `  Keep-warm pings may count against plan usage limits. Nothing was sent anywhere: this ran entirely on your machine.`,
     ),
   );

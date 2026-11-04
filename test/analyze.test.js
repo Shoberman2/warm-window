@@ -120,3 +120,31 @@ test('no cold returns: report says so instead of pitching a $0 fix', () => {
   assert.match(text, /No idle tax found/);
   assert.doesNotMatch(text, /WHAT EACH FIX/);
 });
+
+test('a big write on top of a healthy cache read is not a cold return', () => {
+  const s = parseTranscript(
+    [line({ t: min(0), id: 'a', w1h: 100000 }), line({ t: min(10), id: 'b', read: 100000, w1h: 30000 })].join('\n'),
+  );
+  assert.equal(analyze([s]).idle.events, 0);
+});
+
+test('force-1h does not double-charge cold returns', () => {
+  const s = parseTranscript(
+    [line({ t: min(0), id: 'a', w5m: 100000 }), line({ t: min(10), id: 'b', w5m: 100000 })].join('\n'),
+  );
+  const ttl = analyze([s]).policies.find((x) => x.key === 'ttl1h');
+  const p = priceFor('claude-opus-5-5');
+  // First write pays the 1h premium; the return is a warm read under a 1h cache.
+  const expected = 100000 * p.read + 100000 * (p.write1h - p.write5m);
+  assert.ok(Math.abs(ttl.cost - expected) < 1e-9, `${ttl.cost} vs ${expected}`);
+});
+
+test('compaction cost includes re-caching the system prompt', () => {
+  const s = parseTranscript(
+    [line({ t: min(0), id: 'a', w1h: 100000 }), line({ t: min(120), id: 'b', w1h: 100000 })].join('\n'),
+  );
+  const compact = analyze([s]).policies.find((x) => x.key === 'compact');
+  const p = priceFor('claude-opus-5-5');
+  const expected = 100003 * p.read + 10000 * p.output + 37000 * p.write1h;
+  assert.ok(Math.abs(compact.cost - expected) < 1e-9, `${compact.cost} vs ${expected}`);
+});

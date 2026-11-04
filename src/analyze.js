@@ -11,6 +11,7 @@ export const DEFAULTS = {
   minWrite: 20000, // a cache write at least this big after a gap counts as a full re-cache
   minGapMin: 5, // shortest gap that can expire a cache (5-minute TTL)
   summaryTokens: 10000, // size of a compaction summary
+  prefixTokens: 27000, // system prompt + tools re-cached after a compaction (measured live on Claude Code)
   hybridCandidates: [15, 30, 60, 120, 240, 480], // minutes to keep warm before compacting
 };
 
@@ -36,6 +37,7 @@ function ttlAfter(c, prevTtl) {
 export function analyze(streams, opts = {}) {
   const o = { ...DEFAULTS, ...opts };
   const S = o.summaryTokens;
+  const PREFIX = o.prefixTokens;
 
   const totals = {
     calls: 0,
@@ -74,13 +76,16 @@ export function analyze(streams, opts = {}) {
         const g = (c.t - prev.t) / 60000;
         if (g >= 4) {
           const ctx = c.read + c.write + c.input;
-          const missed = c.write >= o.minWrite && g > o.minGapMin;
+          // Cold = big write AND reads collapsed. A big write on top of a healthy read is just new content.
+          const prevCtx = prev.read + prev.write + prev.input;
+          const missed = c.write >= o.minWrite && g > o.minGapMin && c.read < 0.5 * prevCtx;
           const gap = {
             g,
             ttl,
             ctx,
             missed,
             write: c.write,
+            w5m: c.w5m,
             actual: writeCost(c, p),
             p,
             project: s.project,
@@ -121,7 +126,7 @@ export function analyze(streams, opts = {}) {
   // ---- policy simulations over every gap >= 4 min
   const pingEvery = (ttl) => (ttl >= 60 ? 55 : 4.5);
   const compactAt = (ttl) => (ttl >= 60 ? 55 : 4);
-  const summaryWrite = (gp) => S * (gp.ttl >= 60 ? gp.p.write1h : gp.p.write5m);
+  const summaryWrite = (gp) => (S + PREFIX) * (gp.ttl >= 60 ? gp.p.write1h : gp.p.write5m);
   const compactCost = (gp) => gp.ctx * gp.p.read + S * gp.p.output + summaryWrite(gp);
 
   const policyActual = () => gaps.reduce((a, gp) => a + gp.actual, 0);
@@ -142,6 +147,8 @@ export function analyze(streams, opts = {}) {
         const p = priceFor(c.model);
         surcharge += c.w5m * (p.write1h - p.write5m);
       }
+    // Cold returns were already repriced above, so they don't pay the surcharge again.
+    for (const gp of gaps) if (gp.missed) surcharge -= gp.w5m * (gp.p.write1h - gp.p.write5m);
     return { cost: cost + surcharge, surcharge };
   }
 
