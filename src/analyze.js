@@ -55,6 +55,7 @@ export function analyze(streams, opts = {}) {
 
   const events = []; // idle returns
   const gaps = []; // every gap long enough for a policy to act on
+  const ends = []; // main sessions at their last call
 
   for (const s of streams) {
     let ttl = 5;
@@ -99,7 +100,13 @@ export function analyze(streams, opts = {}) {
       ttl = ttlAfter(c, ttl);
       prev = c;
     }
+    // A main session that ended. Nothing can know you won't return, so a live policy keeps paying.
+    if (prev && s.kind !== 'subagent') {
+      const ctx = prev.read + prev.write + prev.input;
+      if (ctx >= o.minWrite) ends.push({ t: prev.t, ttl, ctx, p: priceFor(prev.model) });
+    }
   }
+  const scanEnd = totals.lastT;
 
   // ---- idle tax: what the idle re-caches cost, minus what they'd cost as warm cache reads
   let idleWriteTokens = 0;
@@ -123,11 +130,33 @@ export function analyze(streams, opts = {}) {
     };
   });
 
+  // ---- what a policy spends on sessions that never came back
+  // No summary write here: a compacted session nobody resumes never re-caches anything.
+  const endCost = (K, thenCompact) => {
+    let cost = 0;
+    let compactions = 0;
+    let pings = 0;
+    for (const e of ends) {
+      const idle = (scanEnd - e.t) / 60000;
+      const n = Math.floor(Math.min(idle, K) / pingEvery(e.ttl));
+      pings += n;
+      cost += n * e.ctx * e.p.read;
+      if (thenCompact && idle > K) {
+        cost += e.ctx * e.p.read + S * e.p.output;
+        compactions++;
+      }
+    }
+    return { cost, compactions, pings };
+  };
+
   // ---- policy simulations over every gap >= 4 min
   const pingEvery = (ttl) => (ttl >= 60 ? 55 : 4.5);
   const compactAt = (ttl) => (ttl >= 60 ? 55 : 4);
   const summaryWrite = (gp) => (S + PREFIX) * (gp.ttl >= 60 ? gp.p.write1h : gp.p.write5m);
   const compactCost = (gp) => gp.ctx * gp.p.read + S * gp.p.output + summaryWrite(gp);
+
+  // Nothing outside a running subagent can ping or compact it. Only a longer TTL reaches it.
+  const untouchable = (gp) => gp.kind === 'subagent';
 
   const policyActual = () => gaps.reduce((a, gp) => a + gp.actual, 0);
 
@@ -157,12 +186,20 @@ export function analyze(streams, opts = {}) {
     let cost = 0;
     let compactions = 0;
     for (const gp of gaps) {
-      if (gp.g > compactAt(gp.ttl)) {
+      if (untouchable(gp)) cost += gp.actual;
+      else if (gp.g > compactAt(gp.ttl)) {
         cost += compactCost(gp);
         compactions++;
       } else cost += gp.actual;
     }
-    return { cost, compactions };
+    let endSpend = 0;
+    for (const e of ends) {
+      if ((scanEnd - e.t) / 60000 > compactAt(e.ttl)) {
+        endSpend += e.ctx * e.p.read + S * e.p.output;
+        compactions++;
+      }
+    }
+    return { cost: cost + endSpend, compactions, endSpend };
   }
 
   // C) Keep the cache warm with tiny pings for up to K minutes, then (optionally) compact.
@@ -171,6 +208,10 @@ export function analyze(streams, opts = {}) {
     let compactions = 0;
     let pings = 0;
     for (const gp of gaps) {
+      if (untouchable(gp)) {
+        cost += gp.actual;
+        continue;
+      }
       const every = pingEvery(gp.ttl);
       const n = Math.floor(Math.min(gp.g, K) / every);
       pings += n;
@@ -184,13 +225,23 @@ export function analyze(streams, opts = {}) {
         cost += gp.actual;
       }
     }
-    return { cost, compactions, pings };
+    const end = endCost(K, thenCompact);
+    return {
+      cost: cost + end.cost,
+      compactions: compactions + end.compactions,
+      pings: pings + end.pings,
+      endSpend: end.cost,
+    };
   }
 
   // D) Hindsight: the cheapest choice for each gap if you knew when you'd return.
   function policyOracle() {
     let cost = 0;
     for (const gp of gaps) {
+      if (untouchable(gp)) {
+        cost += gp.actual;
+        continue;
+      }
       const warm =
         Math.floor(gp.g / pingEvery(gp.ttl)) * gp.ctx * gp.p.read +
         (gp.missed ? gp.write * gp.p.read : gp.actual);
@@ -202,19 +253,22 @@ export function analyze(streams, opts = {}) {
   const actual = policyActual();
   const hybrids = o.hybridCandidates.map((K) => ({ K, ...policyHybrid(K, true) }));
   const bestHybrid = hybrids.reduce((a, b) => (b.cost < a.cost ? b : a));
+  const bestKeepWarm = o.hybridCandidates
+    .map((K) => ({ K, ...policyHybrid(K, false) }))
+    .reduce((a, b) => (b.cost < a.cost ? b : a));
 
   const policies = [
     { key: 'actual', name: 'What you did', cost: actual, note: '' },
     {
       key: 'ttl1h',
-      name: 'Force 1-hour cache everywhere',
+      name: 'Force 1-hour cache everywhere (ENABLE_PROMPT_CACHING_1H)',
       ...policyTtl1h(),
     },
     { key: 'compact', name: 'Compact right before the cache expires', ...policyCompact() },
     {
       key: 'keepwarm',
-      name: `Keep warm up to ${bestHybrid.K} min, then let it expire`,
-      ...policyHybrid(bestHybrid.K, false),
+      name: `Keep warm up to ${bestKeepWarm.K} min, then let it expire`,
+      ...bestKeepWarm,
     },
     {
       key: 'hybrid',

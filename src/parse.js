@@ -2,10 +2,21 @@
 // Each .jsonl file is one stream: a main session or a subagent. Each stream has its own cache.
 // Nothing leaves the machine: we only read token counts and timestamps, never message text.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, sep } from 'node:path';
 import { homedir } from 'node:os';
 
+const CACHE_VERSION = 1; // bump when the parsed call format changes
 export const DEFAULT_DIR = join(homedir(), '.claude', 'projects');
 
 export function findTranscripts(dir) {
@@ -27,15 +38,17 @@ export function findTranscripts(dir) {
   return out;
 }
 
-/**
- * Parse one transcript into an ordered list of API calls.
- * A streamed response can be logged as several lines with the same message id; we keep one.
- */
-export function parseTranscript(text, file = '') {
+const ASSISTANT = Buffer.from('"type":"assistant"');
+const USAGE = Buffer.from('"usage"');
+const NEWLINE = 10;
+const CHUNK = 1 << 20;
+
+/** Turns the usage lines of a transcript into one stream. Lines arrive as strings. */
+function buildStream(lines, file) {
   const calls = [];
   const seen = new Set();
   let project = '';
-  for (const line of text.split('\n')) {
+  for (const line of lines) {
     if (!line || line[0] !== '{' || !line.includes('"usage"')) continue;
     let e;
     try {
@@ -76,18 +89,105 @@ export function parseTranscript(text, file = '') {
   return { file, project, kind, calls };
 }
 
-export function loadStreams(dir, { sinceMs = 0 } = {}) {
+/** Parse transcript text into an ordered list of API calls. */
+export function parseTranscript(text, file = '') {
+  return buildStream(text.split('\n'), file);
+}
+
+/**
+ * Yields only lines that can hold usage data, without decoding the rest. Most of a
+ * transcript is message text we never need, and this also handles files too big for one string.
+ */
+function* usageLines(path) {
+  const fd = openSync(path, 'r');
+  try {
+    const chunk = Buffer.allocUnsafe(CHUNK);
+    let carry = [];
+    for (;;) {
+      const n = readSync(fd, chunk, 0, CHUNK, null);
+      if (n === 0) break;
+      let start = 0;
+      for (;;) {
+        const nl = chunk.indexOf(NEWLINE, start);
+        if (nl === -1 || nl >= n) break;
+        const piece = chunk.subarray(start, nl);
+        const line = carry.length ? Buffer.concat([...carry, piece]) : piece;
+        carry = [];
+        if (line.includes(ASSISTANT) && line.includes(USAGE)) yield line.toString('utf8');
+        start = nl + 1;
+      }
+      if (start < n) carry.push(Buffer.from(chunk.subarray(start, n)));
+    }
+    if (carry.length) {
+      const line = Buffer.concat(carry);
+      if (line.includes(ASSISTANT) && line.includes(USAGE)) yield line.toString('utf8');
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function parseFile(path) {
+  return buildStream(usageLines(path), path);
+}
+
+export function cachePath() {
+  const base = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+  return join(base, 'warm-window', `calls-v${CACHE_VERSION}.json`);
+}
+
+function readCache() {
+  try {
+    return JSON.parse(readFileSync(cachePath(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeCache(entries) {
+  try {
+    const path = cachePath();
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(entries), { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch {
+    // a cache we can't write only costs speed
+  }
+}
+
+export function loadStreams(dir, { sinceMs = 0, useCache = true } = {}) {
   const files = findTranscripts(dir);
+  const cache = useCache ? readCache() : {};
+  const found = new Set(files);
+  let changed = false;
   const streams = [];
   for (const f of files) {
     try {
-      if (sinceMs && statSync(f).mtimeMs < sinceMs) continue;
-      const s = parseTranscript(readFileSync(f, 'utf8'), f);
-      if (sinceMs) s.calls = s.calls.filter((c) => c.t >= sinceMs);
-      if (s.calls.length) streams.push(s);
+      const st = statSync(f);
+      if (sinceMs && st.mtimeMs < sinceMs) continue;
+      let s = cache[f];
+      if (!s || s.mtimeMs !== st.mtimeMs || s.size !== st.size) {
+        const parsed = parseFile(f);
+        s = { mtimeMs: st.mtimeMs, size: st.size, project: parsed.project, kind: parsed.kind, calls: parsed.calls };
+        cache[f] = s;
+        changed = true;
+      }
+      const calls = sinceMs ? s.calls.filter((c) => c.t >= sinceMs) : s.calls;
+      if (calls.length) streams.push({ file: f, project: s.project, kind: s.kind, calls });
     } catch {
       // unreadable file: skip
     }
+  }
+  if (useCache) {
+    const root = dir.endsWith(sep) ? dir : dir + sep;
+    for (const f of Object.keys(cache)) {
+      if (f.startsWith(root) && !found.has(f)) {
+        delete cache[f];
+        changed = true;
+      }
+    }
+    if (changed) writeCache(cache);
   }
   return { files: files.length, streams };
 }

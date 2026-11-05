@@ -23,6 +23,7 @@ Options
   --receipt             print only the one-line shareable receipt
   --paths               show full project paths instead of folder names
   --top <n>             projects to list (default 5)
+  --no-cache            re-read every log instead of using saved results
   -v, --version
   -h, --help
 `;
@@ -35,7 +36,7 @@ function parseArgs(argv) {
     else if (x === '-v' || x === '--version') a.flags.version = true;
     else if (x.startsWith('--')) {
       const key = x.slice(2);
-      const boolean = ['json', 'receipt', 'paths'].includes(key);
+      const boolean = ['json', 'receipt', 'paths', 'no-cache'].includes(key);
       if (boolean) a.flags[key] = true;
       else {
         const val = argv[++i];
@@ -74,7 +75,7 @@ if (cmd !== 'scan') die(`Unknown command "${cmd}"`);
 const dir = flags.dir || DEFAULT_DIR;
 const days = num(flags.days, 'days');
 const sinceMs = days ? Date.now() - days * 86400000 : 0;
-const { files, streams } = loadStreams(dir, { sinceMs });
+const { files, streams } = loadStreams(dir, { sinceMs, useCache: !flags['no-cache'] });
 
 if (!streams.length) {
   die(

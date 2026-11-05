@@ -99,6 +99,7 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
     if (p.surcharge) extra.push(`includes ${usd(p.surcharge)} extra for paying the 1-hour rate on every write`);
     if (p.compactions) extra.push(`${p.compactions} compactions (each one is lossy)`);
     if (p.pings) extra.push(`${p.pings.toLocaleString()} keep-warm pings`);
+    if (p.endSpend) extra.push(`includes ${usd(p.endSpend)} on sessions you never returned to`);
     if (extra.length) L.push(dim(`      ${extra.join(' · ')}`));
   }
   L.push('');
@@ -117,7 +118,7 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
   const best = r.policies.find((p) => p.key === 'hybrid');
   L.push(bold('  WHAT YOU CAN DO TODAY'));
   L.push(`  1. Before you step away from a long session, run ${cyan('/compact')} (or start a fresh session with a handoff note).`);
-  L.push(`  2. Try ${cyan('"promptCacheTtl": "1h"')} in ~/.claude/settings.json if your breaks are mostly 5-60 min.`);
+  L.push(`  2. If "Force 1-hour cache" shows a saving, run claude with ${cyan('ENABLE_PROMPT_CACHING_1H=1')}, the only fix that reaches subagents.`);
   L.push(`  3. Want Warm Window to do this for you automatically (est. ${usd(best.saved)} here)?`);
   L.push(`     👍 or comment on ${cyan(AUTO_POLICY_ISSUE)}. That decides whether it gets built.`);
   L.push('');
@@ -131,6 +132,7 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
       `  Estimates at Anthropic API list prices. On a Pro/Max plan you pay in usage limits, not dollars, but the proportions hold.\n` +
         `  A "cold return" = a cache write ≥ ${tok(r.options.minWrite)} tokens after a gap > ${r.options.minGapMin} min, where cache reads fell below half the prior context. Some may be deliberate fresh starts.\n` +
         `  Simulations assume a ${tok(r.options.summaryTokens)}-token summary plus ${tok(r.options.prefixTokens)} tokens of system prompt re-cached after compacting, and ignore that compaction also makes later turns cheaper.\n` +
+        `  Compact and keep-warm apply to main sessions only: nothing can ping a subagent while it waits.\n` +
         `  Keep-warm pings may count against plan usage limits. Nothing was sent anywhere: this ran entirely on your machine.`,
     ),
   );
