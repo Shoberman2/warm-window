@@ -1,12 +1,12 @@
 # warm-window
 
-**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it.**
+**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it. Works with Claude Code and OpenAI Codex.**
 
 ```
 npx warm-window scan
 ```
 
-`warm-window` is a free command-line tool for [Claude Code](https://claude.com/claude-code) users. It reads the usage logs Claude Code already keeps on your computer and shows you your **idle tax**: the extra money (or plan usage) spent re-loading long conversations after they sat idle. It then replays your real history to show what each possible fix would have saved.
+`warm-window` is a free command-line tool for [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://developers.openai.com/codex) users. It reads the usage logs these agents already keep on your computer and shows you your **idle tax**: the extra money (or plan usage) spent re-loading long conversations after they sat idle. For Claude Code, it then replays your real history to show what each possible fix would have saved.
 
 - **Private:** runs entirely on your machine. It reads only token counts and timestamps, never your messages or code, and sends nothing anywhere. It saves those numbers and project folder paths in `~/.cache/warm-window` so repeat scans are instant (`--no-cache` skips this).
 - **Fast:** about 2 seconds for 4 GB of logs, under 0.1 seconds on repeat scans.
@@ -136,12 +136,22 @@ Based on your report:
 2. **If the "Force 1-hour cache" line shows a saving,** start Claude Code with `ENABLE_PROMPT_CACHING_1H=1`. It's the only fix that reaches subagents. If that line says *costs more*, skip it.
 3. **Want this done automatically?** 👍 [issue #1](https://github.com/Shoberman2/warm-window/issues/1). It decides whether the auto-policy gets built.
 
+## Codex
+
+If you have Codex installed, `scan` adds a second report from `~/.codex/sessions`. Use `--agent codex` to see only that one.
+
+Codex support **measures only** for now: it shows your cold returns, idle tax, gap lengths and top projects, but no fix simulations, because the Claude ones haven't been tested on OpenAI's caching.
+
+A Codex cold return is a gap over 5 minutes where the cached tokens fell below half of the previous context and at least 20k tokens had to be redone. Only tokens already in the conversation count, so new content on that turn isn't called idle tax. Models it can't price are listed in the report rather than guessed. Costs use OpenAI API list prices, without long-context rates, so very large sessions may cost more. Compressed archived sessions (`.jsonl.zst`) aren't read.
+
 ## Options
 
 ```
 npx warm-window scan [options]
 
-  --dir <path>          transcripts folder (default: ~/.claude/projects)
+  --agent <name>        claude, codex or all (default: all that are installed)
+  --dir <path>          Claude Code transcripts folder (default: ~/.claude/projects)
+  --codex-dir <path>    Codex sessions folder (default: ~/.codex/sessions)
   --days <n>            only the last n days
   --min-write <tokens>  smallest re-cache that counts as a cold return (default 20000)
   --summary <tokens>    assumed compaction summary size (default 10000)
@@ -161,7 +171,7 @@ npx warm-window scan [options]
 - **Simulations are simplified.** They assume the conversation would otherwise have gone the same way, assume a 10k-token summary (`--summary`) plus 27k tokens of system prompt re-cached after compacting, and ignore that compaction also makes later turns cheaper.
 - **Compaction loses information.** The cost model doesn't yet measure what a summary forgets. That's on the roadmap.
 - **Logs don't last forever.** Claude Code removes old logs, so totals can fall between scans.
-- **Claude Code only, for now.** Other agents and the raw APIs are on the roadmap.
+- **Two agents, for now.** Fix simulations are Claude Code only. Other agents and the raw APIs are on the roadmap.
 
 ## Roadmap
 
@@ -170,14 +180,16 @@ This first version only measures. What gets built next depends on whether people
 - [ ] **Auto-policy:** a Claude Code hook or local proxy that keeps the cache warm and compacts before expiry for you. **[👍 issue #1](https://github.com/Shoberman2/warm-window/issues/1) if you want this.**
 - [ ] **Quality guard:** a precise index of files, IDs and open tasks kept alongside each summary, so compaction stops forgetting exact details.
 - [ ] **Replay scoring:** grade a compaction strategy on your own past sessions for both cost *and* what it forgot.
-- [ ] Support for other agents (Codex CLI, OpenCode) and the raw Anthropic and OpenAI APIs.
+- [x] Measure the idle tax on OpenAI Codex.
+- [ ] Fix simulations for Codex, tested live like the Claude ones.
+- [ ] Support for other agents (OpenCode, Gemini CLI) and the raw Anthropic and OpenAI APIs.
 
 ## Contributing
 
 ```
 git clone https://github.com/Shoberman2/warm-window
 cd warm-window
-npm test                 # 16 tests, no dependencies to install
+npm test                 # 24 tests, no dependencies to install
 node bin/warm-window.js scan
 ```
 

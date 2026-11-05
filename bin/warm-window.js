@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { analyze, DEFAULTS } from '../src/analyze.js';
 import { loadStreams, DEFAULT_DIR } from '../src/parse.js';
-import { renderReport, receiptLine } from '../src/report.js';
+import { analyzeCodex, loadCodex, DEFAULT_CODEX_DIR } from '../src/codex.js';
+import { renderReport, receiptLine, renderCodexReport, codexReceiptLine } from '../src/report.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const HELP = `warm-window ${pkg.version}
-Find your Claude Code "idle tax": what you pay to re-cache a long conversation
+Find your Claude Code or Codex "idle tax": what you pay to re-cache a long conversation
 after a break, and what keeping it warm or compacting first would have cost.
 Runs locally. Reads only token counts and timestamps. Sends nothing anywhere.
 
@@ -15,7 +16,9 @@ Usage
   npx warm-window scan [options]
 
 Options
-  --dir <path>          transcripts folder (default: ~/.claude/projects)
+  --agent <name>        claude, codex or all (default: all that are installed)
+  --dir <path>          Claude Code transcripts folder (default: ~/.claude/projects)
+  --codex-dir <path>    Codex sessions folder (default: ~/.codex/sessions)
   --days <n>            only the last n days
   --min-write <tokens>  smallest re-cache that counts as a return (default ${DEFAULTS.minWrite})
   --summary <tokens>    assumed compaction summary size (default ${DEFAULTS.summaryTokens})
@@ -72,39 +75,66 @@ if (flags.help || !cmd) {
 }
 if (cmd !== 'scan') die(`Unknown command "${cmd}"`);
 
-const dir = flags.dir || DEFAULT_DIR;
+const agent = flags.agent || 'all';
+if (!['all', 'claude', 'codex'].includes(agent)) die('--agent must be claude, codex or all');
 const days = num(flags.days, 'days');
 const sinceMs = days ? Date.now() - days * 86400000 : 0;
-const { files, streams } = loadStreams(dir, { sinceMs, useCache: !flags['no-cache'] });
+const useCache = !flags['no-cache'];
+const top = num(flags.top, 'top') ?? 5;
+const minWrite = num(flags['min-write'], 'min-write') ?? DEFAULTS.minWrite;
+const shortName = (p) => ({ ...p, project: p.project.split(/[\\/]/).pop() });
 
-if (!streams.length) {
+// An explicit folder means that agent only. Otherwise use whatever is on this machine.
+const dir = flags.dir || DEFAULT_DIR;
+const codexDir = flags['codex-dir'] || DEFAULT_CODEX_DIR;
+const auto = agent === 'all' && !flags.dir && !flags['codex-dir'];
+const wantClaude = agent === 'claude' || (agent === 'all' && (flags.dir || (auto && existsSync(dir))));
+const wantCodex = agent === 'codex' || (agent === 'all' && (flags['codex-dir'] || (auto && existsSync(codexDir))));
+
+const claude = wantClaude ? loadStreams(dir, { sinceMs, useCache }) : { files: 0, streams: [] };
+const codex = wantCodex ? loadCodex(codexDir, { sinceMs, useCache }) : { files: 0, streams: [] };
+
+if (!claude.streams.length && !codex.streams.length) {
+  const files = claude.files + codex.files;
+  const where = [wantClaude && dir, wantCodex && codexDir].filter(Boolean).join(' or ') || dir;
   die(
     files
-      ? `Found ${files} transcript files in ${dir} but no model calls with usage data${days ? ` in the last ${days} days` : ''}.`
-      : `No Claude Code transcripts found in ${dir}. Use --dir to point at them.`,
+      ? `Found ${files} transcript files in ${where} but no model calls with usage data${days ? ` in the last ${days} days` : ''}.`
+      : `No transcripts found in ${where}. Use --dir or --codex-dir to point at them.`,
   );
 }
 
-const result = analyze(streams, {
-  minWrite: num(flags['min-write'], 'min-write') ?? DEFAULTS.minWrite,
-  summaryTokens: num(flags.summary, 'summary') ?? DEFAULTS.summaryTokens,
-});
+const result = claude.streams.length
+  ? analyze(claude.streams, {
+      minWrite,
+      summaryTokens: num(flags.summary, 'summary') ?? DEFAULTS.summaryTokens,
+    })
+  : null;
+const codexResult = codex.streams.length ? analyzeCodex(codex.streams, { minWrite }) : null;
 
 if (flags.json) {
-  const { options, totals, idle, gapsConsidered, policies, hybrids, projects } = result;
-  const out = {
-    version: pkg.version,
-    options,
-    totals,
-    idle,
-    gapsConsidered,
-    policies,
-    hybrids,
-    projects: flags.paths ? projects : projects.map((p) => ({ ...p, project: p.project.split('/').pop() })),
-  };
+  const out = { version: pkg.version };
+  if (result) {
+    const { options, totals, idle, gapsConsidered, policies, hybrids, projects } = result;
+    Object.assign(out, {
+      options,
+      totals,
+      idle,
+      gapsConsidered,
+      policies,
+      hybrids,
+      projects: flags.paths ? projects : projects.map(shortName),
+    });
+  }
+  if (codexResult) {
+    out.codex = { ...codexResult, projects: flags.paths ? codexResult.projects : codexResult.projects.map(shortName) };
+  }
   console.log(JSON.stringify(out, null, 2));
 } else if (flags.receipt) {
-  console.log(receiptLine(result));
+  if (result) console.log(receiptLine(result));
+  if (codexResult) console.log(codexReceiptLine(codexResult));
 } else {
-  console.log(renderReport(result, { showPaths: Boolean(flags.paths), top: num(flags.top, 'top') ?? 5 }));
+  const options = { showPaths: Boolean(flags.paths), top };
+  if (result) console.log(renderReport(result, options));
+  if (codexResult) console.log(renderCodexReport(codexResult, options));
 }

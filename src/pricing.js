@@ -65,3 +65,39 @@ export function priceFor(model) {
     write1h: (p.input * WRITE_1H_MULT) / M,
   };
 }
+
+// OpenAI list prices per 1M tokens: [input, cached read, 30-minute cache write, output].
+// Standard tier, short context. No write price = no separate write charge on that model.
+// Source: developers.openai.com/api/docs/pricing, checked 2026-11-05.
+const OPENAI = {
+  'gpt-6-astra': [10, 1, 12.5, 50],
+  'gpt-6.1-sol': [2, 0.1, 2.5, 10],
+  'gpt-6.1-terra': [1, 0.05, 1.25, 5],
+  'gpt-6-luna': [0.1, 0.01, 0.125, 0.5],
+  'gpt-6-sol': [2, 0.2, 2.5, 10],
+  'gpt-5.6-sol': [4, 0.4, 5, 20],
+  'gpt-5.6-terra': [2, 0.2, 2.5, 12],
+  'gpt-5.6-luna': [0.2, 0.02, 0.25, 1.2],
+  'gpt-5.5': [5, 0.5, 5, 30],
+  'gpt-5.5-pro': [30, 30, 30, 180],
+  'gpt-5.4': [2.5, 0.25, 2.5, 15],
+  'gpt-5.4-pro': [30, 30, 30, 180],
+  'gpt-5.4-mini': [0.75, 0.075, 0.75, 4.5],
+  'gpt-5.4-nano': [0.2, 0.02, 0.2, 1.25],
+  'gpt-5.2': [1.75, 0.175, 1.75, 14],
+  'gpt-5.2-pro': [21, 21, 21, 168],
+  'gpt-5.1': [1.25, 0.125, 1.25, 10],
+  'gpt-5': [1.25, 0.125, 1.25, 10],
+  'gpt-5-mini': [0.25, 0.025, 0.25, 2],
+  'gpt-5-nano': [0.05, 0.005, 0.05, 0.4],
+  'gpt-5-pro': [15, 15, 15, 120],
+};
+const OPENAI_NAMES = Object.keys(OPENAI).sort((a, b) => b.length - a.length);
+
+/** Per-token prices for an OpenAI model, or null if we don't know it. We never guess a price. */
+export function priceForOpenAI(model) {
+  const name = OPENAI_NAMES.find((n) => model === n || model.startsWith(`${n}-`));
+  if (!name) return null;
+  const [input, read, write, output] = OPENAI[name].map((x) => x / 1e6);
+  return { model: name, input, read, write, output };
+}

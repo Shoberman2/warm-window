@@ -140,3 +140,48 @@ export function renderReport(r, { showPaths = false, top = 5 } = {}) {
   L.push('');
   return L.join('\n');
 }
+
+export function codexReceiptLine(r) {
+  return `My Codex idle tax: ${usd(r.idle.tax)} across ${r.idle.events} cold returns (${pct(
+    r.idle.shareOfSpend,
+  )} of spend). Check yours: npx warm-window scan`;
+}
+
+export function renderCodexReport(r, { showPaths = false, top = 5 } = {}) {
+  const L = [];
+  const t = r.totals;
+  const I = r.idle;
+  L.push('');
+  L.push(bold('  warm-window') + dim('  ·  your Codex idle tax (measuring only)'));
+  L.push(dim(`  ${t.calls.toLocaleString()} model calls · ${t.streams} sessions & subagents · ${day(t.firstT)} → ${day(t.lastT)}`));
+  L.push('');
+  L.push(bold('  THE RECEIPT'));
+  L.push(`  Cache hit rate          ${pct(t.hitRate)}`);
+  L.push(`  Model spend (est.)      ${usd(t.spend)}`);
+  L.push(`  Cold returns            ${bold(I.events)} ${dim(`times a conversation resumed after its cache expired${I.events ? ` (~${tok(I.avgRedone)} tokens redone each)` : ''}`)}`);
+  L.push(dim(`    you took a break      ${padL(I.main.events, 4)} · ${usd(I.main.tax)} idle tax`));
+  L.push(dim(`    a subagent waited     ${padL(I.subagent.events, 4)} · ${usd(I.subagent.tax)} idle tax`));
+  L.push(`  ${bold('Idle tax')}                ${bold(yellow(usd(I.tax)))} ${dim(`= ${pct(I.shareOfSpend)} of spend, extra paid vs. a warm cache`)}`);
+  L.push('');
+  if (I.events) {
+    L.push(bold('  HOW LONG THE GAPS WERE') + dim('  (you / subagent)'));
+    const maxEv = Math.max(1, ...I.buckets.map((b) => b.main + b.subagent));
+    for (const b of I.buckets) {
+      L.push(`  ${pad(b.label, 11)} ${bar((b.main + b.subagent) / maxEv)} ${padL(b.main, 4)} / ${pad(b.subagent, 4)} ${dim(`· ${usd(b.tax)}`)}`);
+    }
+    L.push('');
+    L.push(bold('  WHERE THE IDLE TAX CAME FROM'));
+    for (const p of r.projects.slice(0, top)) {
+      const name = showPaths ? p.project : basename(p.project) || p.project;
+      L.push(`  ${pad(name, 32)} ${padL(usd(p.tax), 8)}  ${dim(`${p.events} returns · ${tok(p.tokens)} redone`)}`);
+    }
+    L.push('');
+  } else {
+    L.push(green('  No idle tax found.'));
+    L.push('');
+  }
+  L.push(dim(`  Estimates at OpenAI API list prices. On a ChatGPT plan you pay in usage limits, not dollars.\n  Fix simulations aren't available for Codex yet. Long-context pricing isn't modeled, so very large sessions may cost more.`));
+  if (t.unknownModels.length) L.push(dim(`  Not priced (unknown model): ${t.unknownModels.join(', ')}`));
+  L.push('');
+  return L.join('\n');
+}

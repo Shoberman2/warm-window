@@ -39,7 +39,6 @@ export function findTranscripts(dir) {
 }
 
 const ASSISTANT = Buffer.from('"type":"assistant"');
-const USAGE = Buffer.from('"usage"');
 const NEWLINE = 10;
 const CHUNK = 1 << 20;
 
@@ -95,10 +94,11 @@ export function parseTranscript(text, file = '') {
 }
 
 /**
- * Yields only lines that can hold usage data, without decoding the rest. Most of a
- * transcript is message text we never need, and this also handles files too big for one string.
+ * Yields only lines containing a needle, without decoding the rest. Most of a transcript
+ * is message text we never need, and this also handles files too big for one string.
  */
-function* usageLines(path) {
+export function* linesMatching(path, needles) {
+  const wanted = (line) => needles.some((n) => line.includes(n));
   const fd = openSync(path, 'r');
   try {
     const chunk = Buffer.allocUnsafe(CHUNK);
@@ -113,14 +113,14 @@ function* usageLines(path) {
         const piece = chunk.subarray(start, nl);
         const line = carry.length ? Buffer.concat([...carry, piece]) : piece;
         carry = [];
-        if (line.includes(ASSISTANT) && line.includes(USAGE)) yield line.toString('utf8');
+        if (wanted(line)) yield line.toString('utf8');
         start = nl + 1;
       }
       if (start < n) carry.push(Buffer.from(chunk.subarray(start, n)));
     }
     if (carry.length) {
       const line = Buffer.concat(carry);
-      if (line.includes(ASSISTANT) && line.includes(USAGE)) yield line.toString('utf8');
+      if (wanted(line)) yield line.toString('utf8');
     }
   } finally {
     closeSync(fd);
@@ -128,7 +128,7 @@ function* usageLines(path) {
 }
 
 export function parseFile(path) {
-  return buildStream(usageLines(path), path);
+  return buildStream(linesMatching(path, [ASSISTANT]), path);
 }
 
 export function cachePath() {
@@ -156,7 +156,7 @@ function writeCache(entries) {
   }
 }
 
-export function loadStreams(dir, { sinceMs = 0, useCache = true } = {}) {
+export function loadStreams(dir, { sinceMs = 0, useCache = true, parser = parseFile } = {}) {
   const files = findTranscripts(dir);
   const cache = useCache ? readCache() : {};
   const found = new Set(files);
@@ -168,7 +168,7 @@ export function loadStreams(dir, { sinceMs = 0, useCache = true } = {}) {
       if (sinceMs && st.mtimeMs < sinceMs) continue;
       let s = cache[f];
       if (!s || s.mtimeMs !== st.mtimeMs || s.size !== st.size) {
-        const parsed = parseFile(f);
+        const parsed = parser(f);
         s = { mtimeMs: st.mtimeMs, size: st.size, project: parsed.project, kind: parsed.kind, calls: parsed.calls };
         cache[f] = s;
         changed = true;

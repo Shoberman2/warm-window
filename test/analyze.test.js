@@ -7,7 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseTranscript, parseFile, loadStreams, cachePath } from '../src/parse.js';
 import { analyze } from '../src/analyze.js';
-import { priceFor } from '../src/pricing.js';
+import { priceFor, priceForOpenAI } from '../src/pricing.js';
+import { parseCodexFile, parseCodexLines, analyzeCodex } from '../src/codex.js';
 
 process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), 'ww-cache-')); // never touch the real cache
 
@@ -208,4 +209,98 @@ test('compact and keep-warm leave subagents alone, a longer TTL does not', () =>
   const by = Object.fromEntries(r.policies.map((p) => [p.key, p]));
   for (const k of ['compact', 'keepwarm', 'hybrid', 'oracle']) assert.equal(by[k].saved, 0);
   assert.ok(by.ttl1h.saved > 0); // a 10-minute wait survives a 1-hour cache
+});
+
+// ---- Codex
+
+const meta = (extra = {}) => JSON.stringify({ timestamp: new Date(min(0)).toISOString(), type: 'session_meta', payload: { cwd: '/home/me/app', source: 'vscode', ...extra } });
+const ctx = (model) => JSON.stringify({ timestamp: new Date(min(0)).toISOString(), type: 'turn_context', payload: { model } });
+const rec = (m, id, input, cached, output = 100, write = 0) =>
+  JSON.stringify({
+    timestamp: new Date(min(m)).toISOString(),
+    type: 'token_usage_record',
+    payload: { response_id: id, usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: write, output_tokens: output } },
+  });
+const count = (m, input, cached, total) =>
+  JSON.stringify({
+    timestamp: new Date(min(m)).toISOString(),
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens: total }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: 10 } } },
+  });
+const codexLines = (...rows) => parseCodexLines(rows, '/x/rollout.jsonl');
+
+test('codex: a collapsed cache is a cold return, priced on redone tokens only', () => {
+  // 100k warm, then back after 40 min: 21k cached, 130k input, so 30k of it is new content.
+  const s = codexLines(meta(), ctx('gpt-6-astra'), rec(0, 'a', 100000, 90000), rec(40, 'b', 130000, 21000));
+  const r = analyzeCodex([s]);
+  const p = priceForOpenAI('gpt-6-astra');
+  assert.equal(r.idle.events, 1);
+  assert.equal(r.idle.tokens, 79000); // 100k already there, minus the 21k still cached
+  assert.ok(Math.abs(r.idle.tax - 79000 * (p.input - p.read)) < 1e-9);
+  assert.equal(r.projects[0].project, '/home/me/app');
+});
+
+test('codex: a warm return after a gap is not a cold return', () => {
+  const s = codexLines(meta(), ctx('gpt-6-astra'), rec(0, 'a', 100000, 90000), rec(30, 'b', 150000, 99000));
+  assert.equal(analyzeCodex([s]).idle.events, 0);
+});
+
+test('codex: spend counts cached and uncached input at their own rates', () => {
+  const s = codexLines(ctx('gpt-6.1-sol'), rec(0, 'a', 1000, 600, 50));
+  const p = priceForOpenAI('gpt-6.1-sol');
+  assert.ok(Math.abs(analyzeCodex([s]).totals.spend - (400 * p.input + 600 * p.read + 50 * p.output)) < 1e-12);
+});
+
+test('codex: repeated records and token_count fallback', () => {
+  assert.equal(codexLines(ctx('gpt-6-luna'), rec(0, 'a', 10, 0), rec(1, 'a', 10, 0)).calls.length, 1);
+  const old = codexLines(ctx('gpt-6-luna'), count(0, 10, 0, 20), count(0, 10, 0, 20), count(1, 30, 10, 60));
+  assert.equal(old.calls.length, 2);
+  // When a file has both, the record wins so nothing is counted twice.
+  assert.equal(codexLines(ctx('gpt-6-luna'), count(0, 10, 0, 20), rec(0, 'a', 10, 0)).calls.length, 1);
+});
+
+test('codex: subagent threads are detected', () => {
+  assert.equal(codexLines(meta({ source: { subagent: { other: 'guardian' } } })).kind, 'subagent');
+  assert.equal(codexLines(meta({ parent_thread_id: 'x' })).kind, 'subagent');
+  assert.equal(codexLines(meta()).kind, 'main');
+});
+
+test('codex: unknown models are reported, never guessed', () => {
+  assert.equal(priceForOpenAI('llama-99'), null);
+  assert.equal(priceForOpenAI('gpt-5.4-mini').model, 'gpt-5.4-mini');
+  assert.equal(priceForOpenAI('gpt-5.1-codex').model, 'gpt-5.1');
+  const r = analyzeCodex([codexLines(ctx('llama-99'), rec(0, 'a', 100, 0))]);
+  assert.deepEqual(r.totals.unknownModels, ['llama-99']);
+  assert.equal(r.totals.spend, 0);
+});
+
+test('codex: the file reader skips message text and handles huge lines', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ww-'));
+  const f = join(dir, 'rollout.jsonl');
+  const noise = JSON.stringify({ type: 'response_item', payload: { text: 'x'.repeat(3 << 20) } });
+  writeFileSync(f, [meta(), noise, ctx('gpt-6-astra'), rec(0, 'a', 10, 0), noise, rec(1, 'b', 20, 10)].join('\n'));
+  const s = parseCodexFile(f);
+  assert.equal(s.calls.length, 2);
+  assert.equal(s.project, '/home/me/app');
+});
+
+test('CLI: --agent picks the report, and --dir alone stays on Claude', () => {
+  const codexDir = mkdtempSync(join(tmpdir(), 'ww-'));
+  writeFileSync(join(codexDir, 'rollout.jsonl'), [meta(), ctx('gpt-6-astra'), rec(0, 'a', 100000, 90000), rec(40, 'b', 130000, 21000)].join('\n'));
+  const claudeDir = mkdtempSync(join(tmpdir(), 'ww-'));
+  writeFileSync(join(claudeDir, 'sess.jsonl'), MAIN);
+  const bin = fileURLToPath(new URL('../bin/warm-window.js', import.meta.url));
+  const run = (...a) => execFileSync(process.execPath, [bin, 'scan', ...a], { env: { ...process.env, NO_COLOR: '1' } }).toString();
+
+  const only = run('--agent', 'codex', '--codex-dir', codexDir);
+  assert.match(only, /your Codex idle tax/);
+  assert.doesNotMatch(only, /WHAT EACH FIX/);
+  assert.equal(JSON.parse(run('--codex-dir', codexDir, '--json')).codex.idle.events, 1);
+  assert.doesNotMatch(run('--dir', claudeDir), /Codex/);
+
+  const both = run('--dir', claudeDir, '--codex-dir', codexDir);
+  assert.match(both, /Claude Code idle tax/);
+  assert.match(both, /your Codex idle tax/);
+  assert.match(run('--dir', claudeDir, '--codex-dir', codexDir, '--receipt'), /My Codex idle tax/);
+  assert.throws(() => execFileSync(process.execPath, [bin, 'scan', '--agent', 'gemini'], { stdio: 'pipe' }));
 });
