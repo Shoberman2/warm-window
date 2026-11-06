@@ -1,6 +1,6 @@
 # warm-window
 
-**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it. Works with Claude Code and OpenAI Codex.**
+**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it. Works with Claude Code, OpenAI Codex and [open models](#open-models).**
 
 ```
 npx warm-window scan
@@ -144,16 +144,64 @@ Codex support **measures only** for now: it shows your cold returns, idle tax, g
 
 A Codex cold return is a gap over 5 minutes where the cached tokens fell below half of the previous context and at least 20k tokens had to be redone. Only tokens already in the conversation count, so new content on that turn isn't called idle tax. Models it can't price are listed in the report rather than guessed. Costs use OpenAI API list prices, without long-context rates, so very large sessions may cost more. Compressed archived sessions (`.jsonl.zst`) aren't read.
 
+## Open models
+
+warm-window works with open models such as Qwen, Llama, DeepSeek, Kimi, GLM and Mistral, on your own machine or a hosted service. Tools that run these models don't share a log format, so warm-window includes a small recorder that sits between your tool and the model server:
+
+```bash
+npx warm-window record --target http://127.0.0.1:8080
+```
+
+Then point your tool at `http://127.0.0.1:8788` (keep any path such as `/v1`) and use it normally. Run `npx warm-window scan` whenever you want the report.
+
+| Running on | `--target` |
+|---|---|
+| llama.cpp | `http://127.0.0.1:8080` |
+| Ollama | `http://127.0.0.1:11434` |
+| LM Studio | `http://127.0.0.1:1234` |
+| vLLM | `http://127.0.0.1:8000` |
+| OpenRouter | `https://openrouter.ai/api` |
+| DeepSeek | `https://api.deepseek.com` |
+| Anything else with an OpenAI, Anthropic or Ollama style API | its base address |
+
+**What you get.** A hosted model's idle tax is money. A local model has no bill, so its idle tax is **waiting**: when the cache is gone, the machine has to read the whole conversation again. In live tests with Qwen 0.5B on llama.cpp and Ollama, a 9,400-token conversation took over a second of prompt processing after its cache was cleared, against about 22 milliseconds when warm. That was a tiny model, so larger models will take longer. Results on bigger models are still to come.
+
+**Prices.** warm-window doesn't guess what a host charges for an open model. It uses the cost the server reports if there is one (OpenRouter can include this). Otherwise pass yours in dollars per 1M tokens:
+
+```bash
+npx warm-window scan --agent open --price 0.14,0.014,0.28   # input, cached, output
+```
+
+**Privacy.** The recorder only listens on your own machine. It forwards each call, including your API key, to `--target` and nowhere else. It saves token counts, timing, the model name and the server's hostname to `~/.local/share/warm-window/calls.jsonl`, readable only by you. Prompts, replies and keys are never saved. To group calls into conversations, it stores a keyed hash of how each conversation starts, not the text.
+
+**One small change to your calls.** Streaming chat replies leave out token counts unless asked, so the recorder asks for them and removes that extra piece before your tool sees the reply.
+
+**How well each server is tested.**
+
+| Server | Status |
+|---|---|
+| llama.cpp | Tested live, streaming and non-streaming |
+| Ollama | Tested live on its native, OpenAI-style, Anthropic-style and Responses-style APIs, with the official OpenAI client, calls at once, and a client hanging up mid-reply |
+| OpenRouter, DeepSeek | Forwarding and errors tested against the live services without an API key. Real token counts are tested against their documented format only |
+| vLLM | Tested live on CPU, streaming and non-streaming. Start it with `--enable-prompt-tokens-details` so it reports cached tokens |
+| LM Studio | Not tested live. It uses an OpenAI-style API |
+
+Non-streaming replies from Ollama's OpenAI-style API and from vLLM don't carry wait times, so those calls can show a cold return without the extra seconds. If a server doesn't report cache use, cold returns are judged by a wait more than twice the usual one, with at least three warm calls to compare with.
+
 ## Options
 
 ```
+npx warm-window record --target <url> [--port <n>] [--log <path>]
 npx warm-window scan [options]
 
-  --agent <name>        claude, codex or all (default: all that are installed)
+  --agent <name>        claude, codex, open or all (default: all found on this machine)
   --dir <path>          Claude Code transcripts folder (default: ~/.claude/projects)
   --codex-dir <path>    Codex sessions folder (default: ~/.codex/sessions)
+  --log <path>          recorded calls (default: ~/.local/share/warm-window/calls.jsonl)
+  --price <i,c,o[,w]>   open-model prices per 1M tokens: input, cached, output, cache write
+  --min-gap <minutes>   open models: shortest gap that counts as a return (default 5)
   --days <n>            only the last n days
-  --min-write <tokens>  smallest re-cache that counts as a cold return (default 20000)
+  --min-write <tokens>  smallest re-cache that counts as a cold return (default 20000, or 2000 for local models)
   --summary <tokens>    assumed compaction summary size (default 10000)
   --json                machine-readable output (project names shortened unless --paths)
   --receipt             print only the one-line shareable receipt
@@ -171,7 +219,8 @@ npx warm-window scan [options]
 - **Simulations are simplified.** They assume the conversation would otherwise have gone the same way, assume a 10k-token summary (`--summary`) plus 27k tokens of system prompt re-cached after compacting, and ignore that compaction also makes later turns cheaper.
 - **Compaction loses information.** The cost model doesn't yet measure what a summary forgets. That's on the roadmap.
 - **Logs don't last forever.** Claude Code removes old logs, so totals can fall between scans.
-- **Two agents, for now.** Fix simulations are Claude Code only. Other agents and the raw APIs are on the roadmap.
+- **Fix simulations are Claude Code only.** Codex and open models get measurements, not simulated fixes.
+- **The recorder only sees calls that go through it.** Past usage on open models can't be measured. Tools that send only new messages each turn (for example with `previous_response_id`) may appear as many short conversations.
 
 ## Roadmap
 
@@ -182,14 +231,15 @@ This first version only measures. What gets built next depends on whether people
 - [ ] **Replay scoring:** grade a compaction strategy on your own past sessions for both cost *and* what it forgot.
 - [x] Measure the idle tax on OpenAI Codex.
 - [ ] Fix simulations for Codex, tested live like the Claude ones.
-- [ ] Support for other agents (OpenCode, Gemini CLI) and the raw Anthropic and OpenAI APIs.
+- [x] Measure the idle tax on open models through a local recorder.
+- [ ] Live results on larger models and paid hosted services.
 
 ## Contributing
 
 ```
 git clone https://github.com/Shoberman2/warm-window
 cd warm-window
-npm test                 # 24 tests, no dependencies to install
+npm test                 # 43 tests, no dependencies to install
 node bin/warm-window.js scan
 ```
 

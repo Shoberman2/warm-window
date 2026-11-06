@@ -1,7 +1,7 @@
 {
   "name": "warm-window",
   "version": "0.1.0",
-  "description": "Find your Claude Code or Codex idle tax: what you pay to re-cache long conversations after breaks, and what keeping the cache warm or compacting first would save.",
+  "description": "Find your idle tax on Claude Code, Codex or any open model: what you pay in money or waiting to re-cache long conversations after breaks.",
   "type": "module",
   "bin": {
     "warm-window": "bin/warm-window.js"
@@ -24,6 +24,12 @@
     "claude-code",
     "codex",
     "openai",
+    "open-source-models",
+    "llama.cpp",
+    "ollama",
+    "deepseek",
+    "qwen",
+    "openrouter",
     "anthropic",
     "prompt-caching",
     "cache",

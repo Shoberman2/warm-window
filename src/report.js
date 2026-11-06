@@ -185,3 +185,49 @@ export function renderCodexReport(r, { showPaths = false, top = 5 } = {}) {
   L.push('');
   return L.join('\n');
 }
+
+const secs = (n) => (n >= 3600 ? `${(n / 3600).toFixed(1)} h` : n >= 90 ? `${(n / 60).toFixed(1)} min` : `${n.toFixed(1)} s`);
+
+export function openReceiptLine(r) {
+  const I = r.idle;
+  const cost = [I.tax > 0 && usd(I.tax), I.seconds >= 1 && `${secs(I.seconds)} of waiting`].filter(Boolean).join(' and ') || `${tok(I.tokens)} tokens redone`;
+  return `My open-model idle tax: ${cost} across ${I.events} cold return${I.events === 1 ? '' : 's'}. Check yours: npx warm-window scan`;
+}
+
+export function renderOpenReport(r) {
+  const L = [];
+  const t = r.totals;
+  const I = r.idle;
+  L.push('');
+  L.push(bold('  warm-window') + dim('  ·  your open-model idle tax (measuring only)'));
+  L.push(dim(`  ${t.calls.toLocaleString()} model calls · ${t.conversations} conversation${t.conversations === 1 ? '' : 's'} · ${day(t.firstT)} → ${day(t.lastT)}`));
+  L.push('');
+  L.push(bold('  THE RECEIPT'));
+  L.push(`  Cache hit rate          ${t.hitRate === null ? dim('not reported by this server') : pct(t.hitRate)}`);
+  if (t.spend) L.push(`  Model spend (est.)      ${usd(t.spend)}`);
+  L.push(`  Cold returns            ${bold(I.events)} ${dim(`time${I.events === 1 ? '' : 's'} a conversation resumed after its cache was gone`)}`);
+  L.push(`  Tokens redone           ${tok(I.tokens)}`);
+  if (I.seconds) L.push(`  ${bold('Extra waiting')}           ${bold(yellow(secs(I.seconds)))} ${dim('compared with a warm start')}`);
+  if (I.tax) L.push(`  ${bold('Idle tax')}                ${bold(yellow(usd(I.tax)))}`);
+  L.push('');
+  if (!I.events) {
+    L.push(green('  No idle tax found.'));
+    L.push('');
+  } else {
+    L.push(bold('  HOW LONG THE GAPS WERE'));
+    const maxEv = Math.max(1, ...I.buckets.map((b) => b.events));
+    for (const b of I.buckets.filter((x) => x.events || x.label !== 'under 5 min')) L.push(`  ${pad(b.label, 12)} ${bar(b.events / maxEv)} ${padL(b.events, 4)} ${dim(`· ${[b.seconds >= 0.1 && secs(b.seconds), b.tax > 0 && usd(b.tax)].filter(Boolean).join(' · ') || 'none'}`)}`);
+    L.push('');
+  }
+  L.push(bold('  BY MODEL'));
+  for (const m of r.models) {
+    const cost = [m.seconds >= 0.1 && secs(m.seconds), m.tax > 0 && usd(m.tax)].filter(Boolean).join(' · ');
+    L.push(`  ${pad(m.model.slice(0, 40), 42)} ${padL(m.events, 4)} cold of ${pad(m.calls, 6)} ${dim(`${m.local ? 'local' : m.host}${cost ? ` · ${cost}` : ''}`)}`);
+  }
+  L.push('');
+  if (r.unpriced.length) L.push(dim(`  No dollar figures for ${r.unpriced.join(', ')}. Add yours with --price input,cached,output (dollars per 1M tokens).`));
+  if (t.noCacheData) L.push(dim(`  ${t.noCacheData} calls had no cache data, so those are judged by wait time alone.`));
+  L.push(dim('  Local models show time because there is no bill. Fix simulations are not available for these models yet.'));
+  L.push('');
+  return L.join('\n');
+}
