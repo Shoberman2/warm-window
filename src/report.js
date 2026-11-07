@@ -191,7 +191,7 @@ const secs = (n) => (n >= 3600 ? `${(n / 3600).toFixed(1)} h` : n >= 90 ? `${(n 
 export function openReceiptLine(r) {
   const I = r.idle;
   const cost = [I.tax > 0 && usd(I.tax), I.seconds >= 1 && `${secs(I.seconds)} of waiting`].filter(Boolean).join(' and ') || `${tok(I.tokens)} tokens redone`;
-  return `My open-model idle tax: ${cost} across ${I.events} cold return${I.events === 1 ? '' : 's'}. Check yours: npx warm-window scan`;
+  return `My AI model idle tax: ${cost} across ${I.events} cold return${I.events === 1 ? '' : 's'}. Check yours: npx warm-window scan`;
 }
 
 export function renderOpenReport(r) {
@@ -199,7 +199,7 @@ export function renderOpenReport(r) {
   const t = r.totals;
   const I = r.idle;
   L.push('');
-  L.push(bold('  warm-window') + dim('  ·  your open-model idle tax (measuring only)'));
+  L.push(bold('  warm-window') + dim('  ·  your idle tax on recorded models (measuring only)'));
   L.push(dim(`  ${t.calls.toLocaleString()} model calls · ${t.conversations} conversation${t.conversations === 1 ? '' : 's'} · ${day(t.firstT)} → ${day(t.lastT)}`));
   L.push('');
   L.push(bold('  THE RECEIPT'));

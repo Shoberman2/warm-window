@@ -17,14 +17,15 @@ import {
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const HELP = `warm-window ${pkg.version}
-Find your "idle tax": what you pay to re-cache a long conversation after a break, on
-Claude Code, Codex, or any open model. Runs locally. Keeps only token counts and timing.
+Find your "idle tax": what you pay when a long AI conversation goes cold after a break.
+Reads Claude Code and Codex logs, and records any model behind an OpenAI, Anthropic or
+Ollama style API, hosted or local. Keeps only token counts and timing.
 
 Usage
   npx warm-window scan [options]
   npx warm-window record --target <url> [--port <n>]
 
-Record (for open models and anything else)
+Record (for any other model or tool)
   Point your tool at the printed address. Calls go on to --target unchanged, and only
   token counts and timing are saved. Examples:
     warm-window record --target http://127.0.0.1:8080       llama.cpp
@@ -37,8 +38,8 @@ Options
   --dir <path>          Claude Code transcripts folder (default: ~/.claude/projects)
   --codex-dir <path>    Codex sessions folder (default: ~/.codex/sessions)
   --log <path>          recorded calls (default: ${logPath()})
-  --price <i,c,o[,w]>   open-model prices per 1M tokens: input, cached, output, cache write
-  --min-gap <minutes>   open models: shortest gap that counts as a return (default 5)
+  --price <i,c,o[,w]>   recorded-model prices per 1M tokens: input, cached, output, cache write
+  --min-gap <minutes>   recorded models: shortest gap that counts as a return (default 5)
   --days <n>            only the last n days
   --min-write <tokens>  smallest re-cache that counts as a return (default ${DEFAULTS.minWrite})
   --summary <tokens>    assumed compaction summary size (default ${DEFAULTS.summaryTokens})

@@ -1,14 +1,22 @@
 # warm-window
 
-**Find out how much you pay when your AI coding agent "forgets" a conversation during a break, and what would have prevented it. Works with Claude Code, OpenAI Codex and [open models](#open-models).**
+**Find out what it costs when any AI model "forgets" a long conversation during a break. It works across models and tools, not just Claude Code: OpenAI, Claude, DeepSeek, Qwen, Llama and more, hosted or running on your own computer.**
 
 ```
 npx warm-window scan
 ```
 
-`warm-window` is a free command-line tool for [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://developers.openai.com/codex) users. It reads the usage logs these agents already keep on your computer and shows you your **idle tax**: the extra money (or plan usage) spent re-loading long conversations after they sat idle. For Claude Code, it then replays your real history to show what each possible fix would have saved.
+`warm-window` is a free, open-source command-line tool. It shows you your **idle tax**: the extra money, plan usage or waiting time spent re-loading long conversations after they sat idle.
 
-- **Private:** runs entirely on your machine. It reads only token counts and timestamps, never your messages or code, and sends nothing anywhere. It saves those numbers and project folder paths in `~/.cache/warm-window` so repeat scans are instant (`--no-cache` skips this).
+| What you use | How it works | What you get |
+|---|---|---|
+| **Claude Code** | Reads its logs automatically | Idle tax, plus simulated fixes on your real history |
+| **OpenAI Codex** | Reads its logs automatically | Idle tax |
+| **Any other model or tool** | [Run the recorder](#any-other-model) in front of any server with an OpenAI, Anthropic or Ollama style API | Idle tax in dollars for hosted models, or waiting time for local ones |
+
+The recorder covers open models such as Qwen, Llama, DeepSeek, Kimi, GLM and Mistral, through llama.cpp, Ollama, vLLM, OpenRouter and most other servers.
+
+- **Private:** the analysis runs entirely on your machine. It keeps only token counts and timing, never your messages or code. The recorder forwards your calls to the server you choose and nowhere else. warm-window saves those numbers and project folder paths in `~/.cache/warm-window` so repeat scans are instant (`--no-cache` skips this).
 - **Fast:** about 2 seconds for 4 GB of logs, under 0.1 seconds on repeat scans.
 - **Zero setup:** no account, no API key, no dependencies. Needs Node.js 18 or newer.
 
@@ -18,11 +26,11 @@ npx warm-window scan
 
 ## What it is
 
-Every AI agent conversation has a **context**: everything said so far, plus files read, tool output and instructions. A long Claude Code session can hold 100,000–400,000 tokens of context, and the **whole context is sent to the model again on every single turn.**
+Every long AI conversation has a **context**: everything said so far, plus files read, tool output and instructions. A long coding session can hold 100,000–400,000 tokens of context, and with most models the **whole context is sent again on every single turn.**
 
-To make that affordable, Anthropic uses **prompt caching**. The model provider keeps the already-processed conversation in memory, so re-reading it costs only 2.5–10% of the normal price, depending on the model (a **cache hit**). It's what makes long agent sessions affordable.
+To make that affordable, models use **prompt caching**. The already-processed conversation is kept in memory, so re-reading it is far cheaper and faster (a **cache hit**). On Claude, for example, it costs only 2.5–10% of the normal price. A model on your own computer does the same thing to avoid reprocessing everything.
 
-But the cache **expires**: after 5 minutes by default, or 1 hour if configured. When you return after it expires, the whole conversation has to be processed and stored again at the *premium* write price, 1.25x–2x the normal input price. That is a **cache miss**, and on a 200k-token session one miss costs as much as dozens of warm turns.
+But the cache doesn't last. How long it survives depends on the model and server: 5 minutes to 1 hour on Claude, around 30 minutes on recent OpenAI models, and on your own computer until the model is unloaded or the cache is replaced. When it's gone, the whole conversation has to be processed again. That is a **cache miss**, and on a 200k-token session one miss can cost as much as dozens of warm turns. On Claude you also pay a *premium* write price, 1.25x–2x the normal input price.
 
 `warm-window` measures how often that happens to you, what it costs, and which strategy would have cost the least.
 
@@ -30,7 +38,7 @@ But the cache **expires**: after 5 minutes by default, or 1 hour if configured. 
 
 **Your dashboard says everything is fine.** A typical heavy user sees a 95–98% cache hit rate and assumes caching is working. But hit rate counts tokens, not money. The few misses are the most expensive moments in your bill, and no existing tool reports them separately.
 
-From the author's own Claude Code logs (the three months still on disk):
+Here's a real example from the author's own Claude Code logs (the three months still on disk). The same problem showed up on Codex, at $205 or 22.7% of estimated spend.
 
 | | |
 |---|---|
@@ -39,7 +47,7 @@ From the author's own Claude Code logs (the three months still on disk):
 | Cost of those re-caches above a warm cache (the idle tax) | **$463, 14.9% of all cache spend** |
 | Share of all cache writes that were just re-caching after a gap | **36.1%** |
 
-It happens in two ways, and both surprised us:
+On Claude Code it happened in two ways, and both surprised us:
 
 1. **You take a break.** Lunch, a meeting, overnight. The 1-hour cache dies and the next message re-caches everything.
 2. **A subagent waits.** Subagents use the 5-minute cache by default. If one waits more than 5 minutes on a slow build or test run, its whole conversation is re-cached. In the data above, this was **45% of the idle tax**, and invisible from the main session.
@@ -49,6 +57,8 @@ It happens in two ways, and both surprised us:
 **Nothing else does this.** Provider dashboards show hit rate and spend. Observability tools (Langfuse, Helicone and others) show per-request cost. Claude Code's compaction triggers on how *full* the context is, never on *how long you've been gone*. No tool connects "you stepped away" to "you paid to re-cache", and none tests a fix against your own history before you commit to it.
 
 ## How it works
+
+The idea is the same for every model: find the long gaps, see what had to be reprocessed afterwards, and work out what that cost. Here is the full version for Claude Code, which also replays possible fixes. [Codex](#codex) and [other models](#any-other-model) use the same kind of measurement without the fix simulations.
 
 ```
 ~/.claude/projects/**/*.jsonl   →   find every gap   →   price it   →   replay 5 strategies
@@ -144,9 +154,9 @@ Codex support **measures only** for now: it shows your cold returns, idle tax, g
 
 A Codex cold return is a gap over 5 minutes where the cached tokens fell below half of the previous context and at least 20k tokens had to be redone. Only tokens already in the conversation count, so new content on that turn isn't called idle tax. Models it can't price are listed in the report rather than guessed. Costs use OpenAI API list prices, without long-context rates, so very large sessions may cost more. Compressed archived sessions (`.jsonl.zst`) aren't read.
 
-## Open models
+## Any other model
 
-warm-window works with open models such as Qwen, Llama, DeepSeek, Kimi, GLM and Mistral, on your own machine or a hosted service. Tools that run these models don't share a log format, so warm-window includes a small recorder that sits between your tool and the model server:
+warm-window isn't tied to one provider. It works with open models such as Qwen, Llama, DeepSeek, Kimi, GLM and Mistral, on your own machine or a hosted service, and with any other model behind an OpenAI, Anthropic or Ollama style API. Tools that run these models don't share a log format, so warm-window includes a small recorder that sits between your tool and the model server:
 
 ```bash
 npx warm-window record --target http://127.0.0.1:8080
@@ -198,8 +208,8 @@ npx warm-window scan [options]
   --dir <path>          Claude Code transcripts folder (default: ~/.claude/projects)
   --codex-dir <path>    Codex sessions folder (default: ~/.codex/sessions)
   --log <path>          recorded calls (default: ~/.local/share/warm-window/calls.jsonl)
-  --price <i,c,o[,w]>   open-model prices per 1M tokens: input, cached, output, cache write
-  --min-gap <minutes>   open models: shortest gap that counts as a return (default 5)
+  --price <i,c,o[,w]>   recorded-model prices per 1M tokens: input, cached, output, cache write
+  --min-gap <minutes>   recorded models: shortest gap that counts as a return (default 5)
   --days <n>            only the last n days
   --min-write <tokens>  smallest re-cache that counts as a cold return (default 20000, or 2000 for local models)
   --summary <tokens>    assumed compaction summary size (default 10000)
@@ -219,7 +229,8 @@ npx warm-window scan [options]
 - **Simulations are simplified.** They assume the conversation would otherwise have gone the same way, assume a 10k-token summary (`--summary`) plus 27k tokens of system prompt re-cached after compacting, and ignore that compaction also makes later turns cheaper.
 - **Compaction loses information.** The cost model doesn't yet measure what a summary forgets. That's on the roadmap.
 - **Logs don't last forever.** Claude Code removes old logs, so totals can fall between scans.
-- **Fix simulations are Claude Code only.** Codex and open models get measurements, not simulated fixes.
+- **Fix simulations are Claude Code only.** Codex and other models get measurements, not simulated fixes.
+- **Other API formats aren't recorded yet.** A server has to use an OpenAI, Anthropic or Ollama style API. Google's native Gemini API, for example, isn't read yet.
 - **The recorder only sees calls that go through it.** Past usage on open models can't be measured. Tools that send only new messages each turn (for example with `previous_response_id`) may appear as many short conversations.
 
 ## Roadmap

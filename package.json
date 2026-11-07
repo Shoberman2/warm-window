@@ -1,7 +1,7 @@
 {
   "name": "warm-window",
   "version": "0.1.0",
-  "description": "Find your idle tax on Claude Code, Codex or any open model: what you pay in money or waiting to re-cache long conversations after breaks.",
+  "description": "Find the idle tax on any AI model: what you pay in money or waiting when long conversations go cold after breaks. Works with Claude Code, Codex, open models and any OpenAI, Anthropic or Ollama style API.",
   "type": "module",
   "bin": {
     "warm-window": "bin/warm-window.js"
